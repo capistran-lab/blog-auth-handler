@@ -53,4 +53,5 @@ jobs:
                   s3_bucket: ${{ vars.PROJECT_NAME }}-artifacts
                   s3_key: auth-handler.zip
                   # Añadimos un timeout para que no se quede esperando infinitamente si AWS está lento
-                  timeout: 120s
+                  timeout: 120
+                  max_attempts: 60

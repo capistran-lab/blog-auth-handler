@@ -1,0 +1,39 @@
+name: Deploy Lambda
+
+on:
+    push:
+        branches:
+            - main
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Install dependencies
+              run: |
+                  npm ci
+                  npm audit --audit-level=high
+                  cp -r node_modules src/
+            - name: Run Tests
+              run: npm test
+
+            - name: Zip function
+              run: |
+                  cd src
+                  zip -r ../function.zip .
+
+            - name: Deploy to AWS
+              uses: appleboy/lambda-action@master
+              with:
+                  aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  aws_region: ${{ vars.AWS_REGION }}
+                  function_name: blog-website-auth-handler
+                  zip_file: function.zip

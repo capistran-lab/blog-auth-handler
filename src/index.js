@@ -1,11 +1,16 @@
 const { Client } = require("pg");
 
 exports.handler = async (event) => {
-  console.log("Event received", JSON.stringify(event));
+  console.log("Event received", JSON.stringify(event.triggerSource));
 
   const { userAttributes } = event.request;
   const userEmail = userAttributes.email;
   const userSub = event.userName;
+
+  if (!userEmail || !userSub) {
+    console.error("Mising required  user attributes");
+    return event;
+  }
 
   const client = new Client({
     connectionString: process.env.DATABASE_URL,
@@ -21,10 +26,12 @@ exports.handler = async (event) => {
             ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email;
         `;
 
-    await client.query(query, [userSub, userEmail]);
-    console.log(`User ${userEmail} sync succefully`);
+    const values = [userSub, userEmail];
+
+    await client.query(query, values);
+    console.log(`Sync completed for user sub: ${userSub.substring(0, 8)}...`);
   } catch (error) {
-    console.error("DB Error", error);
+    console.error("Database Sync failed");
   } finally {
     await client.end();
   }

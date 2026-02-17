@@ -18,8 +18,8 @@ jobs:
 
             - name: Install dependencies
               run: |
-                  cd src
                   npm install pg
+                  cp -r node_modules src/
 
             - name: Zip function
               run: |
@@ -31,6 +31,6 @@ jobs:
               with:
                   aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
                   aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-                  aws_region: us-east-1 # Tu región
-                  function_name: blog-serverless-auth-handler # Nombre que pusiste en Terraform
+                  aws_region: ${{ vars.AWS_REGION }}
+                  function_name: blog-website-auth-handler
                   zip_file: function.zip

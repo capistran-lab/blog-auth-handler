@@ -20,30 +20,41 @@ jobs:
               run: |
                   npm ci
                   npm audit --audit-level=high
+
             - name: Run Tests
               run: npm test
 
             - name: Clean devDependencies
               run: |
-                  # Ahora sí , borramos Jest y demás herramientas de desarrollo
+                  # Eliminamos herramientas de test para que el ZIP sea ligero
                   npm prune --production
-                  # Copiamos solo lo necesario para producción
+                  # Copiamos node_modules a src para el empaquetado
                   cp -r node_modules src/
+
             - name: Zip function
               run: |
                   cd src
-                  # Comprimimos solo lo necesario
                   zip -r ../function.zip ./*
 
-            - name: Upload to S3 Artifacts
+            - name: Upload to S3 and Get Version
+              id: upload_s3
               run: |
-                  aws s3 cp function.zip s3://${{ vars.PROJECT_NAME }}-artifacts/auth-handler.zip
+                  # Subimos el archivo y guardamos el ID de versión único que genera S3
+                  VERSION_ID=$(aws s3api put-object \
+                    --bucket ${{ vars.PROJECT_NAME }}-artifacts \
+                    --key auth-handler.zip \
+                    --body function.zip \
+                    --query 'VersionId' \
+                    --output text)
+
+                  # Exportamos la versión para el siguiente paso
+                  echo "s3_version_id=$VERSION_ID" >> $GITHUB_OUTPUT
               env:
                   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
                   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
                   AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
 
-            - name: Deploy to AWS Lambda (via S3)
+            - name: Deploy to AWS Lambda (via S3 Version)
               uses: appleboy/lambda-action@master
               with:
                   aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -52,6 +63,6 @@ jobs:
                   function_name: ${{ vars.PROJECT_NAME }}-auth-handler
                   s3_bucket: ${{ vars.PROJECT_NAME }}-artifacts
                   s3_key: auth-handler.zip
-                  # Añadimos un timeout para que no se quede esperando infinitamente si AWS está lento
-                  timeout: 120
-                  max_attempts: 60
+                  # Usamos el ID específico para forzar el despliegue
+                  s3_object_version: ${{ steps.upload_s3.outputs.s3_version_id }}
+                  max_attempts: 120

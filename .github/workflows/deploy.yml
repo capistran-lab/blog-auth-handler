@@ -20,13 +20,15 @@ jobs:
               run: |
                   npm ci
                   npm audit --audit-level=high
-                  # Limpiamos archivos de desarrollo para reducir el tamaño del ZIP
-                  npm prune --production
-                  cp -r node_modules src/
-
             - name: Run Tests
               run: npm test
 
+            - name: Clean devDependencies
+              run: |
+                  # Ahora sí, borramos Jest y demás herramientas de desarrollo
+                  npm prune --production
+                  # Copiamos solo lo necesario para producción
+                  cp -r node_modules src/
             - name: Zip function
               run: |
                   cd src

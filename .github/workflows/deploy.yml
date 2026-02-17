@@ -57,7 +57,7 @@ jobs:
               id: deploy_lambda
               run: |
                   echo "Waiting for function to be in Active state..."
-                  aws lambda wait function-active-v2 --function-name ${{ vars.PROJECT_NAME }}-auth-handler
+                  aws lambda wait function-active-v2 --function-name ${{ vars.PROJECT_NAME }}-auth-handler --region ${{ vars.AWS_REGION }}
 
                   # 1. Update the code in $LATEST
                   echo "Updating code for function: ${{ vars.PROJECT_NAME }}-auth-handler"
@@ -65,10 +65,11 @@ jobs:
                     --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
                     --s3-bucket ${{ vars.PROJECT_NAME }}-artifacts \
                     --s3-key auth-handler.zip \
-                    --s3-object-version ${{ steps.upload_s3.outputs.s3_version_id }}
+                    --s3-object-version ${{ steps.upload_s3.outputs.s3_version_id }} \
+                    --region ${{ vars.AWS_REGION }}
 
                   # 2. Wait for the code update to process
-                  aws lambda wait function-updated-v2 --function-name ${{ vars.PROJECT_NAME }}-auth-handler
+                  aws lambda wait function-updated-v2 --function-name ${{ vars.PROJECT_NAME }}-auth-handler --region ${{ vars.AWS_REGION }}
 
                   # 3. Sanitize PR title for the description (removes quotes)
                   COMMIT_MSG=$(git log -1 --pretty=%s | sed 's/["'\'']//g')
@@ -79,7 +80,8 @@ jobs:
                   NEW_VER=$(aws lambda publish-version \
                     --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
                     --description "$DEPLOY_DESC" \
-                    --query 'Version' --output text)
+                    --query 'Version' --output text \
+                    --region ${{ vars.AWS_REGION }})
 
                   # Pass version number to the next step
                   echo "new_version=$NEW_VER" >> $GITHUB_OUTPUT
@@ -90,9 +92,20 @@ jobs:
 
             - name: Update Alias 'live'
               run: |
-                  echo "Moving 'live' alias to version: ${{ steps.deploy_lambda.outputs.new_version }}"
+                  echo "Moving 'live' alias to version: ${{ steps.deploy_lambda.outputs.new_version }} in region ${{ vars.AWS_REGION }}"
 
                   aws lambda update-alias \
                     --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
                     --name live \
-                    --function-version ${{ steps.deploy_lambda.outputs.new_version }}
+                    --function-version ${{ steps.deploy_lambda.outputs.new_version }} \
+                    --region ${{ vars.AWS_REGION }} || \
+                  aws lambda create-alias \
+                    --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
+                    --name live \
+                    --function-version ${{ steps.deploy_lambda.outputs.new_version }} \
+                    --description "Main production alias" \
+                    --region ${{ vars.AWS_REGION }}
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}

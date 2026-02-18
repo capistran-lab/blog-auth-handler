@@ -19,10 +19,11 @@
   },
   "homepage": "https://github.com/ucapistranmtz/blog-auth-handler#readme",
   "dependencies": {
-    "@aws-sdk/lib-dynamodb": "^3.992.0",
     "pg": "^8.18.0"
   },
   "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.992.0",
+    "@aws-sdk/lib-dynamodb": "^3.992.0",
     "jest": "^29.7.0"
   }
 }

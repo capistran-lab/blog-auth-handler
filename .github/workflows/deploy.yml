@@ -1,136 +1,136 @@
 name: Deploy Lambda
 
 on:
-    push:
-        branches:
-            - main
+  push:
+    branches:
+      - main
 
 jobs:
-    deploy:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0 # Necesario para leer el cuerpo del commit
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Necesario para leer el cuerpo del commit
 
-            - name: Setup Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: "20"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-            - name: Install dependencies
-              run: |
-                  npm ci
-                  npm audit --audit-level=high
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
 
-            - name: Run Tests
-              run: npm test
+      - name: Run Tests
+        run: npm test
 
-            - name: Clean devDependencies
-              run: |
-                  npm prune --production
-                  cp -r node_modules src/
+      - name: Clean devDependencies
+        run: |
+          npm prune --production
+          cp -r node_modules src/
 
-            - name: Zip function
-              run: |
-                  cd src
-                  zip -r ../function.zip ./*
+      - name: Zip function
+        run: |
+          cd src
+          zip -r ../function.zip ./*
 
-            - name: Upload to S3 and Get Version
-              id: upload_s3
-              run: |
-                  VERSION_ID=$(aws s3api put-object \
-                    --bucket ${{ vars.PROJECT_NAME }}-artifacts \
-                    --key auth-handler.zip \
-                    --body function.zip \
-                    --query 'VersionId' \
-                    --output text)
-                  echo "s3_version_id=$VERSION_ID" >> $GITHUB_OUTPUT
-              env:
-                  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-                  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-                  AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      - name: Upload to S3 and Get Version
+        id: upload_s3
+        run: |
+          VERSION_ID=$(aws s3api put-object \
+            --bucket ${{ vars.PROJECT_NAME }}-artifacts \
+            --key auth-handler.zip \
+            --body function.zip \
+            --query 'VersionId' \
+            --output text)
+          echo "s3_version_id=$VERSION_ID" >> $GITHUB_OUTPUT
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
 
-            - name: Deploy and Publish Lambda Version
-              id: deploy_lambda
-              run: |
-                  echo "Waiting for function to be in Active state..."
-                  aws lambda wait function-active-v2 --function-name ${{ vars.PROJECT_NAME }}-auth-handler --region ${{ vars.AWS_REGION }}
+      - name: Deploy and Publish Lambda Version
+        id: deploy_lambda
+        run: |
+          echo "Waiting for function to be in Active state..."
+          aws lambda wait function-active-v2 --function-name ${{ vars.PROJECT_NAME }}-auth-handler --region ${{ vars.AWS_REGION }}
 
-                  # 1. Update the code
-                  aws lambda update-function-code \
-                    --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
-                    --s3-bucket ${{ vars.PROJECT_NAME }}-artifacts \
-                    --s3-key auth-handler.zip \
-                    --s3-object-version ${{ steps.upload_s3.outputs.s3_version_id }} \
-                    --region ${{ vars.AWS_REGION }}
+          # 1. Update the code
+          aws lambda update-function-code \
+            --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
+            --s3-bucket ${{ vars.PROJECT_NAME }}-artifacts \
+            --s3-key auth-handler.zip \
+            --s3-object-version ${{ steps.upload_s3.outputs.s3_version_id }} \
+            --region ${{ vars.AWS_REGION }}
 
-                  aws lambda wait function-updated-v2 --function-name ${{ vars.PROJECT_NAME }}-auth-handler --region ${{ vars.AWS_REGION }}
+          aws lambda wait function-updated-v2 --function-name ${{ vars.PROJECT_NAME }}-auth-handler --region ${{ vars.AWS_REGION }}
 
-                  # 2. EXTRACCIÓN DEL TÍTULO DEL PR
-                  # El subject (%s) es "Merge pull request #X..."
-                  # El body (%B) contiene el título real en la línea 3
-                  PR_NUMBER=$(git log -1 --pretty=%s | grep -oP '#\d+' | head -n 1 | sed 's/#//' || echo "manual")
+          # 2. EXTRACCIÓN DEL TÍTULO DEL PR
+          # El subject (%s) es "Merge pull request #X..."
+          # El body (%B) contiene el título real en la línea 3
+          PR_NUMBER=$(git log -1 --pretty=%s | grep -oP '#\d+' | head -n 1 | sed 's/#//' || echo "manual")
 
-                  # Tomamos la línea 3 del mensaje completo, limpiamos comillas y espacios
-                  PR_TITLE=$(git log -1 --pretty=%B | sed -n '3p' | sed 's/["'\'']//g' | xargs)
+          # Tomamos la línea 3 del mensaje completo, limpiamos comillas y espacios
+          PR_TITLE=$(git log -1 --pretty=%B | sed -n '3p' | sed 's/["'\'']//g' | xargs)
 
-                  # Si por alguna razón la línea 3 está vacía, limpiamos el subject
-                  if [ -z "$PR_TITLE" ]; then
-                    PR_TITLE=$(git log -1 --pretty=%s | sed -E 's/Merge pull request #[0-9]+ from [^ ]+//' | sed 's/["'\'']//g' | xargs)
-                  fi
+          # Si por alguna razón la línea 3 está vacía, limpiamos el subject
+          if [ -z "$PR_TITLE" ]; then
+            PR_TITLE=$(git log -1 --pretty=%s | sed -E 's/Merge pull request #[0-9]+ from [^ ]+//' | sed 's/["'\'']//g' | xargs)
+          fi
 
-                  echo "PR Title detectado: $PR_TITLE"
+          echo "PR Title detectado: $PR_TITLE"
 
-                  # 3. Publicar versión con el título como descripción
-                  NEW_VER=$(aws lambda publish-version \
-                    --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
-                    --description "$PR_TITLE" \
-                    --query 'Version' --output text \
-                    --region ${{ vars.AWS_REGION }})
+          # 3. Publicar versión con el título como descripción
+          NEW_VER=$(aws lambda publish-version \
+            --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
+            --description "$PR_TITLE" \
+            --query 'Version' --output text \
+            --region ${{ vars.AWS_REGION }})
 
-                  echo "new_version=$NEW_VER" >> $GITHUB_OUTPUT
-                  echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-                  echo "pr_title=$PR_TITLE" >> $GITHUB_OUTPUT
-              env:
-                  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-                  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-                  AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          echo "new_version=$NEW_VER" >> $GITHUB_OUTPUT
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr_title=$PR_TITLE" >> $GITHUB_OUTPUT
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
 
-            - name: Update Aliases
-              run: |
-                  # Actualizar alias 'live' con el título del PR en la descripción
-                  aws lambda update-alias \
-                    --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
-                    --name live \
-                    --function-version ${{ steps.deploy_lambda.outputs.new_version }} \
-                    --description "${{ steps.deploy_lambda.outputs.pr_title }}" \
-                    --region ${{ vars.AWS_REGION }} || \
-                  aws lambda create-alias \
-                    --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
-                    --name live \
-                    --function-version ${{ steps.deploy_lambda.outputs.new_version }} \
-                    --description "${{ steps.deploy_lambda.outputs.pr_title }}" \
-                    --region ${{ vars.AWS_REGION }}
+      - name: Update Aliases
+        run: |
+          # Actualizar alias 'live' con el título del PR en la descripción
+          aws lambda update-alias \
+            --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
+            --name live \
+            --function-version ${{ steps.deploy_lambda.outputs.new_version }} \
+            --description "${{ steps.deploy_lambda.outputs.pr_title }}" \
+            --region ${{ vars.AWS_REGION }} || \
+          aws lambda create-alias \
+            --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
+            --name live \
+            --function-version ${{ steps.deploy_lambda.outputs.new_version }} \
+            --description "${{ steps.deploy_lambda.outputs.pr_title }}" \
+            --region ${{ vars.AWS_REGION }}
 
-                  # Crear/Actualizar alias histórico 'pr-##'
-                  if [ "${{ steps.deploy_lambda.outputs.pr_number }}" != "manual" ]; then
-                    ALIAS_NAME="pr-${{ steps.deploy_lambda.outputs.pr_number }}"
-                    aws lambda update-alias \
-                      --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
-                      --name "$ALIAS_NAME" \
-                      --function-version ${{ steps.deploy_lambda.outputs.new_version }} \
-                      --description "${{ steps.deploy_lambda.outputs.pr_title }}" \
-                      --region ${{ vars.AWS_REGION }} || \
-                    aws lambda create-alias \
-                      --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
-                      --name "$ALIAS_NAME" \
-                      --function-version ${{ steps.deploy_lambda.outputs.new_version }} \
-                      --description "${{ steps.deploy_lambda.outputs.pr_title }}" \
-                      --region ${{ vars.AWS_REGION }}
-                  fi
-              env:
-                  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-                  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-                  AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          # Crear/Actualizar alias histórico 'pr-##'
+          if [ "${{ steps.deploy_lambda.outputs.pr_number }}" != "manual" ]; then
+            ALIAS_NAME="pr-${{ steps.deploy_lambda.outputs.pr_number }}"
+            aws lambda update-alias \
+              --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
+              --name "$ALIAS_NAME" \
+              --function-version ${{ steps.deploy_lambda.outputs.new_version }} \
+              --description "${{ steps.deploy_lambda.outputs.pr_title }}" \
+              --region ${{ vars.AWS_REGION }} || \
+            aws lambda create-alias \
+              --function-name ${{ vars.PROJECT_NAME }}-auth-handler \
+              --name "$ALIAS_NAME" \
+              --function-version ${{ steps.deploy_lambda.outputs.new_version }} \
+              --description "${{ steps.deploy_lambda.outputs.pr_title }}" \
+              --region ${{ vars.AWS_REGION }}
+          fi
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}

@@ -1,7 +1,7 @@
 const { handler } = require("./index");
 const { Client } = require("pg");
 
-// Simulamos la librería pg
+// 1. Mockeamos el cliente de PostgreSQL
 jest.mock("pg", () => {
   const mClient = {
     connect: jest.fn(),
@@ -11,51 +11,68 @@ jest.mock("pg", () => {
   return { Client: jest.fn(() => mClient) };
 });
 
-describe("Auth Lambda Handler", () => {
+describe("Cognito Post-Confirmation Lambda", () => {
   let client;
 
   beforeEach(() => {
+    // Obtenemos la instancia mockeada
     client = new Client();
     jest.clearAllMocks();
+    process.env.DATABASE_URL = "postgres://user:pass@localhost:5432/db";
   });
 
-  test("Debe insertar el usuario correctamente en la DB", async () => {
-    // 1. Preparamos el evento falso que enviaría Cognito
+  test("Debe insertar el usuario en Neon correctamente", async () => {
+    // Simulamos el evento que envía Cognito
     const event = {
-      userName: "user_123",
       request: {
         userAttributes: {
-          email: "test@example.com",
+          sub: "12345-abcde",
+          email: "usuario@test.com",
         },
       },
     };
 
-    // 2. Ejecutamos el handler
     const result = await handler(event);
 
-    // 3. Verificamos que se llamó a la DB con los datos correctos
+    // Verificaciones de DB
     expect(client.connect).toHaveBeenCalledTimes(1);
     expect(client.query).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO users"),
-      ["user_123", "test@example.com"],
+      ["12345-abcde", "usuario@test.com"],
     );
     expect(client.end).toHaveBeenCalledTimes(1);
 
-    // 4. Verificamos que la Lambda retorne el evento (importante para Cognito)
+    // Verificación de contrato con Cognito
     expect(result).toEqual(event);
   });
 
-  test("Debe capturar errores de DB sin romper el flujo", async () => {
-    client.connect.mockRejectedValueOnce(new Error("Connection failed"));
+  test("Debe retornar el evento incluso si la DB falla (resiliencia)", async () => {
+    // Simulamos un error de conexión
+    client.connect.mockRejectedValueOnce(new Error("Connection error"));
 
     const event = {
-      userName: "user_123",
-      request: { userAttributes: { email: "test@example.com" } },
+      request: {
+        userAttributes: { sub: "123", email: "fail@test.com" },
+      },
     };
 
-    // No debe lanzar error (throw), debe manejarlo internamente
     const result = await handler(event);
 
+    // Aunque falle la DB, la Lambda debe devolver el evento para no bloquear a Cognito
+    expect(result).toEqual(event);
+    expect(client.end).toHaveBeenCalled();
+  });
+
+  test("Debe manejar atributos faltantes sin explotar", async () => {
+    const event = {
+      request: {
+        userAttributes: {}, // Sin email ni sub
+      },
+    };
+
+    const result = await handler(event);
+
+    expect(client.connect).not.toHaveBeenCalled();
     expect(result).toEqual(event);
   });
 });

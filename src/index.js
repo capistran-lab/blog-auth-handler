@@ -1,43 +1,60 @@
-const { Client } = require("pg");
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
 
+// Initialize DynamoDB Client for Node.js 22
+const client = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(client);
+
+const TABLE_NAME = process.env.TABLE_NAME;
+
+/**
+ * Cognito Post-Confirmation Trigger
+ * Syncs the newly confirmed user data into DynamoDB
+ */
 exports.handler = async (event) => {
-  console.log("Cognito Trigger Event:", JSON.stringify(event, null, 2));
+  console.log("Cognito Event Received:", JSON.stringify(event, null, 2));
 
-  // Extraemos atributos (Nota: Cognito a veces los manda como strings o null)
+  // Extract attributes from the Cognito event
   const { sub, email, name } = event.request.userAttributes;
 
-  // Solo email y sub son estrictamente críticos para la identidad
-  if (!email || !sub) {
-    console.error("Missing critical attributes: email or sub");
+  // Validate critical identity attributes
+  if (!sub || !email) {
+    console.error("Missing critical attributes: 'sub' or 'email'.");
     return event;
   }
 
-  const client = new Client({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
-  });
+  // Fallback for user name
+  const finalName = name || email.split("@")[0] || "User";
 
   try {
-    await client.connect();
+    // Single Table Design Item Structure
+    // PK: USER#<id> | SK: PROFILE#<id>
+    const userItem = {
+      PK: `USER#${sub}`,
+      SK: `PROFILE#${sub}`,
+      type: "USER",
+      id: sub,
+      email: email,
+      name: finalName,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      emailVerified: true,
+    };
 
-    const query = `
-    INSERT INTO "user" (id, email, name, "emailVerified", created_at, updated_at)
-    VALUES ($1, $2, $3, true, NOW(), NOW())
-    ON CONFLICT (id) DO UPDATE SET 
-      email = EXCLUDED.email, 
-      name = EXCLUDED.name,
-      updated_at = NOW();
-    `;
+    // Persist data using the Document Client (automatically handles JSON to Dynamo mapping)
+    await docClient.send(
+      new PutCommand({
+        TableName: TABLE_NAME,
+        Item: userItem,
+      }),
+    );
 
-    // Si 'name' no viene, usamos 'Anonymous' o el inicio del email
-    const finalName = name || email.split("@")[0] || "Anonymous";
-
-    await client.query(query, [sub, email, finalName]);
-    console.log(`Sync completed for user: ${email}`);
+    console.log(`Successfully indexed user in DynamoDB: ${email}`);
   } catch (error) {
-    console.error("Database Sync failed:", error);
-  } finally {
-    await client.end();
+    // Error handling with descriptive logging
+    console.error("DynamoDB Sync Error:", error.message || error);
+
+    // We return the event so the user confirmation is not blocked in Cognito
   }
 
   return event;

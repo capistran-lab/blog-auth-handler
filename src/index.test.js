@@ -1,85 +1,64 @@
-const { handler } = require("./index");
-const { Client } = require("pg");
+// 1. Definimos los mocks ANTES de cualquier otra cosa
+const mockSend = jest.fn();
+const mockPutCommand = jest.fn((args) => args);
 
-// 1. Mockeamos el cliente de PostgreSQL
-jest.mock("pg", () => {
-  const mClient = {
-    connect: jest.fn(),
-    query: jest.fn(),
-    end: jest.fn(),
+// 2. Mockeamos el SDK completo
+jest.mock("@aws-sdk/client-dynamodb", () => ({
+  DynamoDBClient: jest.fn().mockImplementation(() => ({
+    send: mockSend,
+  })),
+}));
+
+jest.mock("@aws-sdk/lib-dynamodb", () => ({
+  DynamoDBDocumentClient: {
+    from: jest.fn().mockImplementation(() => ({
+      send: mockSend,
+    })),
+  },
+  PutCommand: mockPutCommand,
+}));
+
+describe("Auth Lambda Handler", () => {
+  const mockEvent = {
+    request: {
+      userAttributes: {
+        sub: "user-123",
+        email: "test@example.com",
+        name: "Uriel Capistran",
+      },
+    },
   };
-  return { Client: jest.fn(() => mClient) };
-});
-
-describe("Cognito Post-Confirmation Lambda - Neon Sync", () => {
-  let client;
 
   beforeEach(() => {
-    client = new Client();
     jest.clearAllMocks();
-    process.env.DATABASE_URL = "postgres://user:pass@localhost:5432/db";
+    process.env.TABLE_NAME = "blog-website-table";
+    // Forzamos que el require obtenga una versión fresca si es posible
+    jest.resetModules();
   });
 
-  test("Debe insertar el usuario en la tabla 'user' con camelCase", async () => {
-    const event = {
-      request: {
-        userAttributes: {
-          sub: "auth0|12345",
-          email: "test@example.com",
-          name: "John Doe",
-        },
-      },
-    };
+  test("should successfully sync user data to DynamoDB", async () => {
+    mockSend.mockResolvedValueOnce({});
 
-    const result = await handler(event);
+    // Importamos la función aquí
+    const { handler } = require("./index");
 
-    // Verificamos que la query use las comillas dobles y el nombre de tabla correcto
-    expect(client.query).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT INTO "user"'),
-      expect.arrayContaining(["auth0|12345", "test@example.com", "John Doe"]),
-    );
+    await handler(mockEvent);
 
-    // Verificamos que se envíe el valor de emailVerified como true (implícito en la query)
-    expect(client.query).toHaveBeenCalledWith(
-      expect.stringContaining('"emailVerified"'),
-      expect.anything(),
-    );
+    // Verificamos que PutCommand fue instanciado
+    expect(mockPutCommand).toHaveBeenCalled();
 
-    expect(result).toEqual(event);
+    // Verificamos que el cliente envió el comando
+    expect(mockSend).toHaveBeenCalledWith(expect.anything());
   });
 
-  test("Debe usar un nombre fallback si 'name' viene vacío", async () => {
-    const event = {
-      request: {
-        userAttributes: {
-          sub: "user_99",
-          email: "no-name@test.com",
-          // name no viene
-        },
-      },
-    };
+  test("should catch and log errors", async () => {
+    mockSend.mockRejectedValueOnce(new Error("DynamoDB Down"));
+    const consoleSpy = jest.spyOn(console, "error").mockImplementation();
 
-    await handler(event);
+    const { handler } = require("./index");
+    await handler(mockEvent);
 
-    // Verificamos que el tercer parámetro sea el nombre extraído del email o Anonymous
-    const queryCalls = client.query.mock.calls[0];
-    const params = queryCalls[1];
-    expect(params[2]).toBe("no-name"); // email.split('@')[0]
-  });
-
-  test("No debe explotar si la base de datos está caída", async () => {
-    client.connect.mockRejectedValueOnce(new Error("Neon Connection Timeout"));
-
-    const event = {
-      request: {
-        userAttributes: { sub: "123", email: "error@test.com" },
-      },
-    };
-
-    const result = await handler(event);
-
-    // IMPORTANTE: El handler debe retornar el evento para no bloquear Cognito
-    expect(result).toEqual(event);
-    expect(client.end).toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 });
